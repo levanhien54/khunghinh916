@@ -61,10 +61,14 @@ def make_blurred_background(
     cropped = small[rect.y:rect.y + rect.height, rect.x:rect.x + rect.width]
     if cropped.size == 0:
         cropped = small
-    bg = cv2.resize(cropped, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
 
+    # Làm tối (dim) TRÊN ẢNH NHỎ trước khi phóng to: rẻ hơn nhiều (vài trăm px thay
+    # vì ~2M px của canvas đầy) và convertScaleAbs chạy C++ 1 lượt, không cấp phát
+    # buffer float32. resize tuyến tính là phép tuyến tính nên
+    # resize(cropped*dim) ≡ resize(cropped)*dim (chỉ khác làm tròn — vô hình vì mờ).
     if dim != 1.0:
-        bg = np.clip(bg.astype(np.float32) * dim, 0, 255).astype(np.uint8)
+        cropped = cv2.convertScaleAbs(cropped, alpha=dim)
+    bg = cv2.resize(cropped, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
     return bg
 
 
