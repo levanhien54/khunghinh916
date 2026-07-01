@@ -30,10 +30,17 @@ Canvas 9:16 (1080×1920) cố định, gồm 2 lớp:
        không pan (toàn bộ trục đã hiển thị).
    - Phần foreground tràn ra ngoài canvas bị **cắt bỏ** (clip).
 
-Hệ quả: `fg_scale=1.0` với nguồn landscape = ảnh tĩnh contain (không pan vì chiều
-rộng vừa khít, chiều cao nhỏ hơn → căn giữa). Càng phóng to, pan-bám-người càng
-kích hoạt (trục vượt canvas). Bám người dùng CHUNG nguồn tâm với chế độ cắt: auto
-đã phân tích → tâm người nói đã làm mượt (camera path); manual → tâm khung/tâm kéo.
+Diễn đạt theo đúng lời người dùng (nguồn landscape — trường hợp chính): người dùng
+**đặt cỡ `fg_scale` cố định** (do người quyết định); với cỡ đó video A **rộng hơn**
+canvas → **camera ảo di chuyển NGANG bám theo người** để người luôn nằm trong khung,
+**2 rìa trái/phải thừa bị cắt bỏ**; video A **thấp hơn** canvas → **trên/dưới là
+nền mờ** (letterbox). Khi cần pan ngang phải chọn `fg_scale > 1` (đủ để video A rộng
+hơn canvas, tạo biên để dịch).
+
+Hệ quả: `fg_scale=1.0` với nguồn landscape = ảnh tĩnh contain (rộng vừa khít nên
+CHƯA có biên pan ngang, cao nhỏ hơn → căn giữa dọc). Càng phóng to, pan-bám-người
+càng rõ (trục vượt canvas). Bám người dùng CHUNG nguồn tâm với chế độ cắt: auto đã
+phân tích → tâm người nói đã làm mượt (camera path); manual → tâm khung/tâm kéo.
 
 Blur mode **trực giao** với Thủ công/Tự động: bật Nền mờ chỉ đổi CÁCH ghép
 (compose-on-blur thay vì crop-lấp-kín); nguồn tâm vẫn theo mode đang chọn.
