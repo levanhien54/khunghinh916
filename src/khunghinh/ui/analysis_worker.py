@@ -178,8 +178,9 @@ class AnalysisWorker(QThread):
             # OVERLAP GIẢI MÃ: 1 producer sở hữu reader, giải mã frame vào hàng đợi
             # song song với main (pool detect+hist → consume). Reader CHỈ producer chạm
             # (an toàn cv2). Hàng đợi FIFO có chặn ⇒ thứ tự frame BẤT BIẾN ⇒ vẫn
-            # byte-identical. maxsize giới hạn số frame trong luồng (chặn bộ nhớ).
-            frame_q: "queue.Queue" = queue.Queue(maxsize=2 * _DECODE_BATCH)
+            # byte-identical. maxsize giới hạn số frame trong luồng (chặn bộ nhớ — giải
+            # mã là nút cổ chai nên đệm ~1 lô là đủ để overlap, không phình RAM ở 4K).
+            frame_q: "queue.Queue" = queue.Queue(maxsize=_DECODE_BATCH)
             stop_evt = threading.Event()
             producer_exc: list = []
 
