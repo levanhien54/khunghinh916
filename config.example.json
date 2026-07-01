@@ -1,0 +1,15 @@
+{
+  "target_width": 1080,
+  "target_height": 1920,
+  "zoom_min": 1.0,
+  "zoom_max": 3.0,
+  "zoom_default": 1.0,
+  "smoothing_min_cutoff": 1.0,
+  "smoothing_beta": 0.05,
+  "export_crf": 18,
+  "export_codec": "libx264",
+  "export_preset": "veryfast",
+  "detect_stride": 1,
+  "path_recenter_frames": 6,
+  "yunet_model_path": ""
+}

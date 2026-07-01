@@ -1,0 +1,19 @@
+# ===== Core GUI =====
+PyQt6>=6.6
+
+# ===== Computer vision & numerics =====
+# opencv-contrib-python ĐÃ bao gồm FaceDetectorYN (YuNet). KHÔNG cài đồng thời
+# opencv-python để tránh xung đột (xem README, mục "Gỡ rối").
+opencv-contrib-python>=4.9
+numpy>=1.24
+
+# ===== Media I/O =====
+ffmpeg-python>=0.2.0          # cần binary ffmpeg trên PATH để ghép audio + encode H.264
+# av                          # (nâng cấp tùy chọn) PyAV: timestamp chính xác cho A/V sync khi tích hợp ASD
+
+# ===== Inference runtime cho model ONNX (YuNet, ASD tương lai) =====
+onnxruntime>=1.16
+
+# ===== Dev / test =====
+pytest>=8.0
+pytest-qt>=4.4

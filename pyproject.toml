@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "khunghinh916"
+version = "0.1.0"
+description = "Tự cắt khung video sang tỉ lệ dọc TikTok 9:16 với auto-reframe theo người nói — chạy trên CPU."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "PyQt6>=6.6",
+  "opencv-contrib-python>=4.9",
+  "numpy>=1.24",
+  "ffmpeg-python>=0.2.0",
+  "onnxruntime>=1.16",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-qt>=4.4"]
+
+[project.scripts]
+khunghinh = "khunghinh.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
