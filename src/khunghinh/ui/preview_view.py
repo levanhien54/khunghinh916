@@ -153,7 +153,9 @@ class _ComposeGizmo(QGraphicsItem):
         self._fg = QRectF(0, 0, 1, 1)   # rect foreground trên canvas (có thể tràn)
         self._cur_scale = 1.0
         self._drag = False
-        self._half0 = 1.0               # nửa đường chéo fg lúc bắt đầu kéo
+        self._half0 = 1.0               # khoảng cách góc→tâm lúc BẮT ĐẦU kéo (cố định)
+        self._scale0 = 1.0              # cỡ lúc BẮT ĐẦU kéo (cố định)
+        self._center0 = QPointF(0, 0)   # tâm fg lúc BẮT ĐẦU kéo (cố định)
         self.setAcceptHoverEvents(True)
         self.setZValue(10)
 
@@ -204,16 +206,20 @@ class _ComposeGizmo(QGraphicsItem):
         corners = (self._fg.topLeft(), self._fg.topRight(),
                    self._fg.bottomLeft(), self._fg.bottomRight())
         if any(self._near(pos, c, self.HANDLE + 3) for c in corners):
+            # Đóng băng tâm + cỡ tại lúc nhấn để scale kéo = hàm THUẦN theo khoảng
+            # cách chuột (không cộng dồn nhân khi _cur_scale bị cập nhật giữa lúc kéo).
             self._drag = True
-            self._half0 = max(1.0, _pt_dist(self._fg.center(), pos))
+            self._center0 = QPointF(self._fg.center())
+            self._half0 = max(1.0, _pt_dist(self._center0, pos))
+            self._scale0 = self._cur_scale
             event.accept()
         else:
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: ANN001
         if self._drag:
-            half = max(1.0, _pt_dist(self._fg.center(), event.pos()))
-            new_scale = self._cur_scale * (half / self._half0)
+            half = max(1.0, _pt_dist(self._center0, event.pos()))
+            new_scale = self._scale0 * (half / self._half0)
             self._view.emit_fg_scale(new_scale)
             event.accept()
         else:
