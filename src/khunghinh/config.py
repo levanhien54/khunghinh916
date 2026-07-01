@@ -29,10 +29,13 @@ class AppConfig:
     export_codec: str = "libx264"
     export_preset: str = "veryfast"   # x264/x265: nhanh hơn 'medium' 3-5x, size to hơn chút
 
-    # --- Nền mờ (lớp nền an toàn phía dưới khung hình đã cắt) ---
+    # --- Nền mờ (compose thủ công: video A trên nền mờ) ---
     blurred_background: bool = False
     bg_blur_downscale_divisor: int = 32
     bg_blur_dim: float = 0.55
+    fg_scale_default: float = 1.0   # 1.0 = vừa khít (contain); >1 phóng to; <1 thu nhỏ
+    fg_scale_min: float = 0.3
+    fg_scale_max: float = 3.0
 
     # --- Model (để trống = tự fallback Haar cascade, không cần tải gì) ---
     yunet_model_path: str = ""

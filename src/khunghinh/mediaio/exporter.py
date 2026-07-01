@@ -17,7 +17,7 @@ from typing import Callable, Iterator
 import cv2
 import numpy as np
 
-from ..core.compositing import composite_crop_on_blurred_background, crop_and_resize
+from ..core.compositing import composite_manual_on_blurred_background, crop_and_resize
 from ..core.reframe_engine import ReframeEngine
 from .reader import VideoReader
 
@@ -42,6 +42,7 @@ class ExportSettings:
     blurred_background: bool = False
     bg_blur_downscale_divisor: int = 32
     bg_blur_dim: float = 0.55
+    fg_scale: float = 1.0   # cỡ video A trên nền mờ (chế độ compose thủ công)
 
 
 def ffmpeg_available() -> bool:
@@ -134,18 +135,24 @@ class VideoExporter:
             frame = self.reader.read_next()
             if frame is None:
                 break
-            if center_provider is not None:
-                cx, cy = center_provider(idx)
-                rect = self.engine.crop_for_center(cx, cy, dt, smooth=smooth)
-            else:
-                rect = self.engine.static_crop()
             if self.settings.blurred_background:
-                out_frame = composite_crop_on_blurred_background(
-                    frame, rect, tw, th,
+                h, w = frame.shape[:2]
+                if center_provider is not None:
+                    cx, cy = center_provider(idx)
+                else:
+                    cx, cy = w / 2.0, h / 2.0
+                out_frame = composite_manual_on_blurred_background(
+                    frame, tw, th, self.settings.fg_scale,
+                    cx / w, cy / h,
                     downscale_divisor=self.settings.bg_blur_downscale_divisor,
                     dim=self.settings.bg_blur_dim,
                 )
             else:
+                if center_provider is not None:
+                    cx, cy = center_provider(idx)
+                    rect = self.engine.crop_for_center(cx, cy, dt, smooth=smooth)
+                else:
+                    rect = self.engine.static_crop()
                 out_frame = crop_and_resize(frame, rect, tw, th)
             yield out_frame
             idx += 1

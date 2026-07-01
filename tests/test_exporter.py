@@ -69,3 +69,9 @@ def test_audio_flags_reencode_for_incompatible_source():
 def test_audio_flags_reencode_when_codec_unknown():
     flags = _exporter()._audio_flags_for_codec("")
     assert flags[:2] == ["-c:a", "aac"]
+
+
+def test_export_settings_has_fg_scale_default():
+    from khunghinh.mediaio.exporter import ExportSettings
+    s = ExportSettings(out_path="out.mp4")
+    assert s.fg_scale == 1.0
