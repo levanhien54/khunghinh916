@@ -69,6 +69,7 @@ class AppConfig:
 
     # --- Phân tích ---
     analysis_downscale_width: int = 320
+    analysis_detect_workers: int = 0   # số luồng detect song song (0 = auto = số core-1, tối đa 16)
 
     @property
     def target_aspect(self) -> float:

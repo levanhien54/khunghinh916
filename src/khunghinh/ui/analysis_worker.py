@@ -7,9 +7,11 @@ AnalysisResult qua signal (chỉ giao tiếp qua signal, không đụng widget).
 from __future__ import annotations
 
 import logging
-import queue
+import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
+import cv2
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -27,6 +29,32 @@ from ..tracking.iou_tracker import IouTracker
 log = logging.getLogger(__name__)
 
 PROGRESS_EVERY = 5
+_DECODE_BATCH = 32   # số frame giải mã mỗi lô trước khi detect song song
+
+
+def _resolve_detect_workers(cfg) -> int:  # noqa: ANN001
+    """Số luồng detect song song. 0 = auto = min(16, số core - 1)."""
+    w = int(getattr(cfg, "analysis_detect_workers", 0) or 0)
+    if w > 0:
+        return w
+    return min(16, max(1, (os.cpu_count() or 4) - 1))
+
+
+class _Pass1State:
+    """Trạng thái + bộ tích luỹ của Pass 1 (giữ tuần tự, dù detect chạy song song)."""
+
+    def __init__(self, tracker, selector, last_reset_at: int):  # noqa: ANN001
+        self.tracker = tracker
+        self.selector = selector
+        self.prev_hist = None
+        self.last_faces: list = []
+        self.last_reset_at = last_reset_at
+        self.raw_centers: list = []
+        self.chosen: list = []
+        self.faces_pf: list = []
+        self.lumas: list = []
+        self.diffs: list = []
+        self.face_counts: list = []
 
 
 class AnalysisWorker(QThread):
@@ -44,6 +72,33 @@ class AnalysisWorker(QThread):
 
     def cancel(self) -> None:
         self._cancel = True
+
+    def _consume_frame(self, st: "_Pass1State", frame, dets, luma: float, hist, i: int, cfg, vad) -> None:  # noqa: ANN001
+        """Xử lý stateful 1 frame (TUẦN TỰ theo thứ tự): track (nếu có dets mới) →
+        diff histogram (cần prev) → cắt-cảnh inline → ASD → tích luỹ. `luma`/`hist`
+        đã tính SẴN ở pool (stateless); dets=None ⇒ coast mặt cũ (frame bỏ qua stride)."""
+        if dets is not None:
+            st.last_faces = st.tracker.update(dets)
+        faces = st.last_faces
+        # Bhattacharyya so với hist frame trước (phần DUY NHẤT của đặc trưng cảnh cần
+        # trạng thái tuần tự — nên nằm ở đây; phần tính hist nặng đã chạy song song).
+        diff = 0.0 if st.prev_hist is None else float(cv2.compareHist(st.prev_hist, hist, cv2.HISTCMP_BHATTACHARYYA))
+        st.prev_hist = hist
+        if i > 0 and diff > cfg.cut_threshold and (i - st.last_reset_at) >= cfg.cut_min_scene_len:
+            st.selector.reset()
+            st.last_reset_at = i
+        vad_i = float(vad[min(i, len(vad) - 1)])
+        dec = st.selector.update(frame, faces, vad_i, i)
+        # Không có mặt để bám → GAP (NaN) để camera_path GIỮ vị trí (không giật về giữa).
+        if faces:
+            st.raw_centers.append((dec.cx, dec.cy))
+        else:
+            st.raw_centers.append((float("nan"), float("nan")))
+        st.chosen.append(dec.track_id if dec.track_id is not None else -1)
+        st.faces_pf.append(faces)
+        st.lumas.append(luma)
+        st.diffs.append(diff)
+        st.face_counts.append(len(faces))
 
     def run(self) -> None:
         try:
@@ -74,7 +129,6 @@ class AnalysisWorker(QThread):
                 vad = np.ones(max(1, info.frame_count), dtype=np.float32)
 
             self.stage.emit("Phát hiện & bám khuôn mặt + người nói…")
-            detector = build_face_detector(cfg)
             tracker = IouTracker(high_score_thresh=cfg.face_score_threshold)
             selector = ActiveSpeakerSelector(
                 info.width, info.height,
@@ -85,116 +139,75 @@ class AnalysisWorker(QThread):
                     hysteresis_margin=cfg.asd_hysteresis_margin,
                 ),
             )
-
-            raw_centers: list[tuple[float, float]] = []
-            chosen: list[int] = []
-            faces_pf: list = []
-            lumas: list[float] = []
-            diffs: list[float] = []
-            face_counts: list[int] = []
-            prev_hist = None
-
             detect_stride = max(1, int(cfg.detect_stride))
-            last_faces: list = []
+            workers = _resolve_detect_workers(cfg)
 
+            # SONG SONG HOÁ DETECTION (nút nghẽn ~71%): detector.detect stateless từng
+            # frame và Haar/YuNet NHẢ GIL ⇒ thread-pool chạy detect nhiều frame song
+            # song (mỗi luồng 1 detector riêng qua thread-local; cv2.setNumThreads(1)
+            # tránh nạp chồng luồng nội bộ). CHỈ main thread chạm reader (giải mã theo
+            # lô) ⇒ an toàn cv2.VideoCapture. Phần stateful (track/features/ASD/cắt-cảnh)
+            # chạy TUẦN TỰ đúng thứ tự frame ⇒ kết quả TƯƠNG ĐƯƠNG bản đơn luồng.
+            tls = threading.local()
+            fwidth = cfg.analysis_downscale_width
+
+            def _pool_task(args):  # noqa: ANN001, ANN202
+                """Chạy SONG SONG mỗi frame: detect (nếu tới mốc stride) + hist đặc
+                trưng cảnh — cả hai stateless, nặng, nhả GIL. Trả (dets|None, luma, hist)."""
+                frame, do_detect = args
+                dets = None
+                if do_detect:
+                    d = getattr(tls, "det", None)
+                    if d is None:
+                        d = build_face_detector(cfg)
+                        tls.det = d
+                    dets = d.detect(frame)
+                luma, _diff, hist = compute_features_step(None, frame, fwidth)
+                return dets, luma, hist
+
+            st = _Pass1State(tracker, selector, -cfg.cut_min_scene_len)
             reader.rewind()
             i = 0
             total = max(1, info.frame_count)
-            last_reset_at = -cfg.cut_min_scene_len  # cho phép reset ngay tại frame 0 nếu cần
-
-            # Producer đọc frame (giải mã) song song với consumer (detect/track/ASD),
-            # giấu thời gian giải mã sau tính toán. 1 producer + 1 consumer + hàng đợi
-            # FIFO có chặn ⇒ thứ tự frame bất biến ⇒ kết quả không đổi. cv2.VideoCapture
-            # chỉ được chạm bởi DUY NHẤT producer (không an toàn đa luồng).
-            frame_q: "queue.Queue" = queue.Queue(maxsize=16)  # đệm giải mã rộng hơn để overlap mượt
-            stop_evt = threading.Event()
-            producer_exc: list = []
-
-            def _produce() -> None:
-                try:
-                    while not stop_evt.is_set():
-                        fr = reader.read_next()
-                        if fr is None:
-                            break
-                        while not stop_evt.is_set():
-                            try:
-                                frame_q.put(fr, timeout=0.1)
-                                break
-                            except queue.Full:
-                                continue
-                except Exception as exc:  # noqa: BLE001
-                    producer_exc.append(exc)
-                finally:
-                    # Sentinel EOF PHẢI tới được consumer: dùng put có chặn (không
-                    # put_nowait) để không bị rớt khi hàng đợi đang đầy → tránh
-                    # consumer treo vĩnh viễn ở get(). Thoát sớm nếu đang dừng.
-                    while not stop_evt.is_set():
-                        try:
-                            frame_q.put(None, timeout=0.1)
-                            break
-                        except queue.Full:
-                            continue
-
-            producer = threading.Thread(target=_produce, daemon=True)
-            producer.start()
+            prev_cv2_threads = cv2.getNumThreads()
+            pool = ThreadPoolExecutor(max_workers=workers) if workers >= 2 else None
+            if pool is not None:
+                cv2.setNumThreads(1)
             try:
                 while True:
                     if self._cancel:
                         raise InterruptedError()
-                    frame = frame_q.get()
-                    if frame is None:
+                    batch = []
+                    for _ in range(_DECODE_BATCH):
+                        fr = reader.read_next()
+                        if fr is None:
+                            break
+                        batch.append(fr)
+                    if not batch:
                         break
 
-                    # Detect theo stride: quỹ đạo camera đã làm mượt mạnh ở Pass 2 nên
-                    # bỏ bớt detect ít ảnh hưởng; giữa các frame "coast" bằng cách tái
-                    # dùng khuôn mặt gần nhất. VAD/môi/cắt-cảnh vẫn tính MỖI frame.
-                    if i % detect_stride == 0:
-                        last_faces = tracker.update(detector.detect(frame))
-                    faces = last_faces
-                    luma, diff, prev_hist = compute_features_step(prev_hist, frame, cfg.analysis_downscale_width)
-                    # Gợi ý cắt cảnh inline (Pass1) → reset lịch sử môi để không lấy
-                    # chuyển động "qua cắt cảnh" làm tín hiệu. Có debounce min_scene_len
-                    # để tránh reset liên tục mỗi frame trên cảnh quay rung/nhiễu — điểm
-                    # cắt CHÍNH XÁC dùng cho camera path vẫn là detect_scene_cuts (Pass2).
-                    if i > 0 and diff > cfg.cut_threshold and (i - last_reset_at) >= cfg.cut_min_scene_len:
-                        selector.reset()
-                        last_reset_at = i
-
-                    vad_i = float(vad[min(i, len(vad) - 1)])
-                    dec = selector.update(frame, faces, vad_i, i)
-
-                    # Không có mặt nào để bám → báo GAP (NaN) để camera_path GIỮ vị
-                    # trí cũ, thay vì giật khung về giữa trên các dropout detect ngắn.
-                    if faces:
-                        raw_centers.append((dec.cx, dec.cy))
+                    # detect chỉ ở mốc stride (frame khác coast); hist tính MỖI frame.
+                    tasks = [(batch[bi], (i + bi) % detect_stride == 0) for bi in range(len(batch))]
+                    if pool is not None:
+                        results = list(pool.map(_pool_task, tasks))
                     else:
-                        raw_centers.append((float("nan"), float("nan")))
-                    chosen.append(dec.track_id if dec.track_id is not None else -1)
-                    faces_pf.append(faces)
-                    lumas.append(luma)
-                    diffs.append(diff)
-                    face_counts.append(len(faces))
+                        results = [_pool_task(t) for t in tasks]
 
-                    i += 1
-                    if i % PROGRESS_EVERY == 0:
-                        self.progress.emit(i, max(total, i))
+                    for bi, (dets, luma, hist) in enumerate(results):
+                        self._consume_frame(st, batch[bi], dets, luma, hist, i + bi, cfg, vad)
+                    i += len(batch)
+                    self.progress.emit(min(i, total), max(total, i))
             finally:
-                stop_evt.set()
-                # rút cạn hàng đợi để producer (nếu đang chặn ở put) thoát được
-                try:
-                    while True:
-                        frame_q.get_nowait()
-                except queue.Empty:
-                    pass
-                # Join KHÔNG timeout: read_next() luôn trả về nên producer chắc chắn
-                # kết thúc; phải đợi nó thoát HẲN trước khi outer-finally gọi
-                # reader.release() (cv2.VideoCapture không an toàn đa luồng — nếu
-                # release() chạy khi producer còn trong read_next() có thể crash native).
-                producer.join()
-            if producer_exc:
-                raise producer_exc[0]
+                if pool is not None:
+                    pool.shutdown(wait=True)
+                    cv2.setNumThreads(prev_cv2_threads)
 
             n = i
+            raw_centers = st.raw_centers
+            chosen = st.chosen
+            faces_pf = st.faces_pf
+            lumas = st.lumas
+            diffs = st.diffs
             self.stage.emit("Tính quỹ đạo camera…")
             cut_frames = detect_scene_cuts(
                 np.array(lumas), np.array(diffs),

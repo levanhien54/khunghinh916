@@ -10,6 +10,7 @@
   "export_codec": "libx264",
   "export_preset": "veryfast",
   "detect_stride": 1,
+  "analysis_detect_workers": 0,
   "path_recenter_frames": 6,
   "yunet_model_path": ""
 }
