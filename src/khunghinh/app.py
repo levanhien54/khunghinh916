@@ -20,9 +20,73 @@ def _icon_path() -> str:
     return ""
 
 
+def _install_crash_logging() -> None:
+    """Ghi MỌI exception chưa bắt (main + luồng nền) ra log — nếu không, ở bản .exe
+    windowed một lỗi trong slot Qt sẽ đóng cửa sổ mà KHÔNG để lại dấu vết."""
+    import threading
+    import traceback
+
+    clog = logging.getLogger("khunghinh")
+
+    def _hook(exc_type, exc, tb) -> None:  # noqa: ANN001
+        clog.critical("Lỗi CHƯA BẮT (main):\n%s", "".join(traceback.format_exception(exc_type, exc, tb)))
+
+    sys.excepthook = _hook
+
+    def _thook(args) -> None:  # noqa: ANN001
+        name = getattr(args.thread, "name", "?")
+        clog.critical("Lỗi CHƯA BẮT (luồng %s):\n%s", name,
+                      "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)))
+
+    threading.excepthook = _thook
+
+
+def _selftest(vid: str, log: logging.Logger) -> int:
+    """Chạy phân tích + xuất headless (KHÔNG GUI) để chẩn đoán crash TRONG bản .exe.
+    Dùng: `KhungHinh916.exe --selftest <video>`. Kết quả ghi ra log + in stdout."""
+    from PyQt6.QtCore import QCoreApplication
+
+    from .core.reframe_engine import ReframeEngine, ReframeParams
+    from .core.smoothing import CameraSmoother
+    from .mediaio.exporter import ExportSettings, VideoExporter
+    from .mediaio.reader import VideoReader
+    from .ui.analysis_worker import AnalysisWorker
+
+    _ = QCoreApplication([])  # cần cho QThread; không cần màn hình
+    log.info("SELFTEST bắt đầu: %s", vid)
+    try:
+        cfg = AppConfig()
+        res = AnalysisWorker(vid, 1080 / 1920, cfg)._analyze()
+        log.info("SELFTEST phân tích OK: %d frame", res.frame_count)
+        reader = VideoReader(vid)
+        info = reader.open()
+        eng = ReframeEngine(
+            ReframeParams(info.width, info.height, 1080 / 1920, 1.0, 1.0, 0.5, 0.5),
+            CameraSmoother(cfg.smoothing_min_cutoff, cfg.smoothing_beta),
+        )
+        out = str(Path.cwd() / "selftest_out.mp4")
+        VideoExporter(reader, eng, ExportSettings(out_path=out)).run(
+            center_provider=res.make_center_provider(), smooth=False)
+        reader.release()
+        log.info("SELFTEST xuất OK: %s", out)
+        print("SELFTEST OK", flush=True)
+        return 0
+    except BaseException as exc:  # noqa: BLE001
+        log.critical("SELFTEST CRASH: %s", exc, exc_info=True)
+        print(f"SELFTEST CRASH: {exc}", flush=True)
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     setup_logging(level=logging.INFO)
+    _install_crash_logging()
     log = logging.getLogger("khunghinh")
+
+    args = list(argv if argv is not None else sys.argv)
+    if "--selftest" in args:
+        idx = args.index("--selftest")
+        vid = args[idx + 1] if idx + 1 < len(args) else ""
+        return _selftest(vid, log)
 
     config = AppConfig.load(Path.cwd() / "config.json")
 
