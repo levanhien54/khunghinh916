@@ -172,8 +172,6 @@ class AnalysisWorker(QThread):
             total = max(1, info.frame_count)
             prev_cv2_threads = cv2.getNumThreads()
             pool = ThreadPoolExecutor(max_workers=workers) if workers >= 2 else None
-            if pool is not None:
-                cv2.setNumThreads(1)
 
             # OVERLAP GIẢI MÃ: 1 producer sở hữu reader, giải mã frame vào hàng đợi
             # song song với main (pool detect+hist → consume). Reader CHỈ producer chạm
@@ -207,8 +205,14 @@ class AnalysisWorker(QThread):
                             continue
 
             producer = threading.Thread(target=_produce, daemon=True)
-            producer.start()
+            started = False
             try:
+                # setNumThreads + start() nằm TRONG try để finally luôn khôi phục
+                # cv2 threads + dọn producer, kể cả khi start() lỗi (cạn luồng).
+                if pool is not None:
+                    cv2.setNumThreads(1)
+                producer.start()
+                started = True
                 eof = False
                 while not eof:
                     if self._cancel:
@@ -244,8 +248,9 @@ class AnalysisWorker(QThread):
                     pass
                 # Join KHÔNG timeout: read_next() luôn trả về ⇒ producer chắc chắn kết
                 # thúc; phải thoát HẲN trước khi outer-finally gọi reader.release()
-                # (cv2.VideoCapture không an toàn đa luồng).
-                producer.join()
+                # (cv2.VideoCapture không an toàn đa luồng). Chỉ join nếu đã start().
+                if started:
+                    producer.join()
                 if pool is not None:
                     pool.shutdown(wait=True)
                     cv2.setNumThreads(prev_cv2_threads)
