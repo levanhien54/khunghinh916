@@ -132,8 +132,102 @@ class _CropOverlay(QGraphicsItem):
         super().mouseReleaseEvent(event)
 
 
+def _pt_dist(a: QPointF, b: QPointF) -> float:
+    """Khoảng cách Euclid giữa 2 QPointF (không dùng manhattanLength — không có ở mọi bản Qt)."""
+    return ((a.x() - b.x()) ** 2 + (a.y() - b.y()) ** 2) ** 0.5
+
+
+class _ComposeGizmo(QGraphicsItem):
+    """Gizmo compose: viền quanh foreground + 4 tay nắm góc (kéo = scale) + nút reset.
+
+    Toạ độ theo pixel CANVAS. Kéo góc đổi cỡ theo tỉ lệ khoảng cách góc→tâm foreground,
+    phát fgScaleDragged(scale_mới). Bấm nút tròn dưới -> fgResetClicked.
+    """
+
+    HANDLE = 9  # bán kính tay nắm (px canvas)
+
+    def __init__(self, view: "PreviewView"):
+        super().__init__()
+        self._view = view
+        self._cw, self._ch = 1, 1
+        self._fg = QRectF(0, 0, 1, 1)   # rect foreground trên canvas (có thể tràn)
+        self._cur_scale = 1.0
+        self._drag = False
+        self._half0 = 1.0               # nửa đường chéo fg lúc bắt đầu kéo
+        self.setAcceptHoverEvents(True)
+        self.setZValue(10)
+
+    def set_canvas(self, cw: int, ch: int) -> None:
+        self.prepareGeometryChange()
+        self._cw, self._ch = max(1, cw), max(1, ch)
+
+    def set_fg(self, x: int, y: int, w: int, h: int, scale: float) -> None:
+        self.prepareGeometryChange()
+        self._fg = QRectF(x, y, w, h)
+        self._cur_scale = scale
+        self.update()
+
+    def _reset_center(self) -> QPointF:
+        return QPointF(self._cw / 2, self._ch + self.HANDLE * 3)
+
+    def boundingRect(self) -> QRectF:
+        r = self._fg.adjusted(-self.HANDLE, -self.HANDLE, self.HANDLE, self.HANDLE)
+        rc = self._reset_center()
+        return r.united(QRectF(0, 0, self._cw, self._ch)).united(
+            QRectF(rc.x() - self.HANDLE, rc.y() - self.HANDLE, self.HANDLE * 2, self.HANDLE * 2))
+
+    def paint(self, painter, option, widget=None) -> None:  # noqa: ANN001
+        pen = QPen(QColor(255, 255, 255), max(2, int(self._cw / 400)))
+        painter.setPen(pen)
+        painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        painter.drawRect(self._fg)
+        painter.setBrush(QBrush(QColor(255, 255, 255)))
+        for c in (self._fg.topLeft(), self._fg.topRight(),
+                  self._fg.bottomLeft(), self._fg.bottomRight()):
+            painter.drawEllipse(c, self.HANDLE, self.HANDLE)
+        rc = self._reset_center()
+        painter.setBrush(QBrush(QColor(30, 32, 40)))
+        painter.drawEllipse(rc, self.HANDLE + 2, self.HANDLE + 2)
+        painter.setPen(QPen(QColor(255, 255, 255), 2))
+        painter.drawArc(QRectF(rc.x() - self.HANDLE, rc.y() - self.HANDLE,
+                               self.HANDLE * 2, self.HANDLE * 2), 30 * 16, 300 * 16)
+
+    def _near(self, a: QPointF, b: QPointF, r: float) -> bool:
+        return _pt_dist(a, b) <= r * 1.6
+
+    def mousePressEvent(self, event) -> None:  # noqa: ANN001
+        pos = event.pos()
+        if self._near(pos, self._reset_center(), self.HANDLE + 2):
+            self._view.emit_fg_reset()
+            event.accept()
+            return
+        corners = (self._fg.topLeft(), self._fg.topRight(),
+                   self._fg.bottomLeft(), self._fg.bottomRight())
+        if any(self._near(pos, c, self.HANDLE + 3) for c in corners):
+            self._drag = True
+            self._half0 = max(1.0, _pt_dist(self._fg.center(), pos))
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: ANN001
+        if self._drag:
+            half = max(1.0, _pt_dist(self._fg.center(), event.pos()))
+            new_scale = self._cur_scale * (half / self._half0)
+            self._view.emit_fg_scale(new_scale)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001
+        self._drag = False
+        super().mouseReleaseEvent(event)
+
+
 class PreviewView(QGraphicsView):
     cropCenterChanged = pyqtSignal(float, float)  # tâm mong muốn (pixel ảnh gốc)
+    fgScaleDragged = pyqtSignal(float)            # cỡ mới khi kéo góc gizmo
+    fgResetClicked = pyqtSignal()                 # bấm nút reset trên gizmo
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -151,14 +245,39 @@ class PreviewView(QGraphicsView):
         self._scene.addItem(self._overlay)
         self._overlay.setVisible(False)
         self._overlay_wanted = True  # ý muốn hiện overlay của caller, độc lập set_frame()
+        self._gizmo = _ComposeGizmo(self)
+        self._scene.addItem(self._gizmo)
+        self._gizmo.setVisible(False)
+        self._compose_mode = False
 
     def set_frame(self, frame: np.ndarray) -> None:
         self._pixmap_item.setPixmap(ndarray_to_qpixmap(frame))
         h, w = frame.shape[:2]
         self._overlay.set_image_size(w, h)
-        self._overlay.setVisible(self._overlay_wanted)
+        self._overlay.setVisible(self._overlay_wanted and not self._compose_mode)
         self._scene.setSceneRect(0, 0, w, h)
         self.fit()
+
+    def set_compose_mode(self, on: bool) -> None:
+        self._compose_mode = on
+        self._overlay.setVisible(self._overlay_wanted and not on)
+        self._gizmo.setVisible(on)
+
+    def set_compose(self, canvas_bgr, fg_x, fg_y, fg_w, fg_h, scale) -> None:  # noqa: ANN001
+        """Chế độ nền mờ: hiện canvas đã ghép + gizmo scale quanh foreground."""
+        h, w = canvas_bgr.shape[:2]
+        self._pixmap_item.setPixmap(ndarray_to_qpixmap(canvas_bgr))
+        self._gizmo.set_canvas(w, h)
+        self._gizmo.set_fg(fg_x, fg_y, fg_w, fg_h, scale)
+        rect = self._gizmo.boundingRect()
+        self._scene.setSceneRect(rect)     # mở rộng để thấy tay nắm tràn ra ngoài canvas
+        self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def emit_fg_scale(self, scale: float) -> None:
+        self.fgScaleDragged.emit(float(scale))
+
+    def emit_fg_reset(self) -> None:
+        self.fgResetClicked.emit()
 
     def set_crop_rect(self, rect: CropRect) -> None:
         self._overlay.set_crop(rect)
