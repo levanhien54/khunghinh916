@@ -110,9 +110,9 @@ class ControlPanel(QWidget):
         form.addRow("Thời lượng:", self.lbl_duration)
         root.addWidget(info_box)
 
-        # --- Khung cắt 9:16 + zoom theo trục ---
-        zoom_box = QGroupBox("Khung cắt 9:16 — Zoom theo trục")
-        zlay = QVBoxLayout(zoom_box)
+        # --- Khung cắt 9:16 + zoom theo trục (chỉ dùng khi KHÔNG bật Nền mờ) ---
+        self.zoom_box = QGroupBox("Khung cắt 9:16 — Zoom theo trục")
+        zlay = QVBoxLayout(self.zoom_box)
         self.chk_link = QCheckBox("Khoá Zoom X = Y (giữ tỉ lệ, không méo)")
         self.chk_link.setChecked(True)
         self.sld_zoom_x = _ZoomSlider("Zoom X", zoom_min, zoom_max, zoom_def)
@@ -126,7 +126,7 @@ class ControlPanel(QWidget):
         zlay.addWidget(self.sld_zoom_y)
         zlay.addWidget(hint)
         zlay.addWidget(self.btn_reset)
-        root.addWidget(zoom_box)
+        root.addWidget(self.zoom_box)
 
         # --- Nền mờ (compose thủ công: video A trên nền mờ) ---
         bg_box = QGroupBox("Nền")
@@ -170,6 +170,10 @@ class ControlPanel(QWidget):
     # --- Nền mờ ---
     def _on_blur_bg_toggle(self, checked: bool) -> None:
         is_blur = bool(checked)
+        # Nền mờ = compose (video A lên nền mờ) → KHÔNG dùng khung cắt 9:16/Zoom X-Y.
+        # Ẩn cả nhóm crop, chỉ hiện điều khiển cỡ video A. Chế độ Thủ công/Tự động vẫn
+        # giữ (quyết định vị trí compose: tĩnh giữa hay bám người nói).
+        self.zoom_box.setVisible(not is_blur)
         self.sld_fg_scale.setVisible(is_blur)
         self.btn_fg_reset.setVisible(is_blur)
         self.backgroundModeChanged.emit(is_blur)
