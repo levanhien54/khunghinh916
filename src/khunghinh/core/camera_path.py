@@ -34,10 +34,10 @@ class CameraPathParams:
     d_cutoff: float = 1.0
     settle_frames: int = 9
     snap_reset_on_cut: bool = True
-    # Recenter: sau khi mục tiêu ở NGOÀI dead-zone liên tục N frame (chuyển động
-    # thực, không phải jitter) → bỏ offset dead-zone để người nói về đúng tâm.
-    # 0 = tắt (giữ hành vi cũ: lệch tâm cố định bằng dead-zone khi pan).
-    recenter_frames: int = 6
+    # Recenter: sau khi mục tiêu ở NGOÀI dead-zone liên tục N frame → bỏ offset để về
+    # đúng tâm. TẮT mặc định (0) vì đo cho thấy nó tạo răng cưa ~dz mỗi N frame khi pan
+    # (giật); lệch tâm ~6% do dead-zone thì nhỏ hơn nhiều. Bật (>0) nếu chấp nhận giật.
+    recenter_frames: int = 0
 
 
 @dataclass
@@ -158,23 +158,25 @@ def build_camera_path(
             # phẩy động khiến |tx-held| > dz_x lặp lại mỗi frame gap và recenter sẽ
             # "phát minh" chuyển động camera đúng lúc không có mặt để bám.
             if not holding and not is_gap:
-                # Dead-zone: chỉ dịch "held" khi mục tiêu ra ngoài vùng chết. Nếu
-                # mục tiêu ở ngoài LIÊN TỤC >= recenter frame (chuyển động thực),
-                # bỏ offset để bám đúng tâm; jitter (ra/vào vùng chết) reset streak.
+                # Dead-zone + recenter. Mục tiêu ngoài vùng chết LIÊN TỤC >= recenter
+                # frame (chuyển động THỰC, không phải jitter) ⇒ BÁM THẲNG tâm (held=tx)
+                # và GIỮ streak cao để tiếp tục bám mượt — tránh răng cưa "snap-rồi-
+                # reset" gây giật (~dz mỗi N frame). Còn trong "nghi ngờ jitter" thì
+                # kẹp dead-zone. Vào lại vùng chết (đứng yên) ⇒ reset streak.
                 if abs(tx - held[0]) > dz_x:
-                    held[0] = tx - np.sign(tx - held[0]) * dz_x
                     streak_x += 1
                     if recenter and streak_x >= recenter:
                         held[0] = tx
-                        streak_x = 0
+                    else:
+                        held[0] = tx - np.sign(tx - held[0]) * dz_x
                 else:
                     streak_x = 0
                 if abs(ty - held[1]) > dz_y:
-                    held[1] = ty - np.sign(ty - held[1]) * dz_y
                     streak_y += 1
                     if recenter and streak_y >= recenter:
                         held[1] = ty
-                        streak_y = 0
+                    else:
+                        held[1] = ty - np.sign(ty - held[1]) * dz_y
                 else:
                     streak_y = 0
             sx, sy = sm.smooth(held[0], held[1], dt)

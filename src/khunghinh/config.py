@@ -62,7 +62,9 @@ class AppConfig:
     path_deadzone_frac_x: float = 0.06
     path_deadzone_frac_y: float = 0.08
     path_settle_frames: int = 9
-    path_recenter_frames: int = 6   # bám lại đúng tâm sau khi pan liên tục N frame (0=tắt)
+    # Recenter TẮT mặc định (0): đo cho thấy nó tạo răng cưa ~dz mỗi N frame khi pan
+    # (giật), trong khi lỗi nó sửa (lệch tâm ~6%) là nhỏ. Bật (>0) nếu chấp nhận giật.
+    path_recenter_frames: int = 0
 
     # --- Phát hiện cắt cảnh ---
     cut_threshold: float = 0.35
