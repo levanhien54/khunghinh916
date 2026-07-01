@@ -42,33 +42,53 @@ def _install_crash_logging() -> None:
 
 
 def _selftest(vid: str, log: logging.Logger) -> int:
-    """Chạy phân tích + xuất headless (KHÔNG GUI) để chẩn đoán crash TRONG bản .exe.
+    """Chạy ĐÚNG ĐƯỜNG GUI (QApplication + MainWindow hiện + nhập video + phân tích
+    QThread thật + vẽ preview auto & nền mờ) để tái hiện crash TRONG bản .exe.
     Dùng: `KhungHinh916.exe --selftest <video>`. Kết quả ghi ra log + in stdout."""
-    from PyQt6.QtCore import QCoreApplication
+    from PyQt6.QtCore import QEventLoop, QTimer
+    from PyQt6.QtWidgets import QApplication
 
-    from .core.reframe_engine import ReframeEngine, ReframeParams
-    from .core.smoothing import CameraSmoother
-    from .mediaio.exporter import ExportSettings, VideoExporter
+    from .core.reframe_engine import ReframeParams
     from .mediaio.reader import VideoReader
-    from .ui.analysis_worker import AnalysisWorker
+    from .ui.main_window import MainWindow
 
-    _ = QCoreApplication([])  # cần cho QThread; không cần màn hình
-    log.info("SELFTEST bắt đầu: %s", vid)
+    app = QApplication.instance() or QApplication(sys.argv)
+    log.info("SELFTEST (GUI) bắt đầu: %s", vid)
     try:
         cfg = AppConfig()
-        res = AnalysisWorker(vid, 1080 / 1920, cfg)._analyze()
-        log.info("SELFTEST phân tích OK: %d frame", res.frame_count)
+        w = MainWindow(cfg)
+        w.show()
+        app.processEvents()
+
         reader = VideoReader(vid)
         info = reader.open()
-        eng = ReframeEngine(
-            ReframeParams(info.width, info.height, 1080 / 1920, 1.0, 1.0, 0.5, 0.5),
-            CameraSmoother(cfg.smoothing_min_cutoff, cfg.smoothing_beta),
-        )
-        out = str(Path.cwd() / "selftest_out.mp4")
-        VideoExporter(reader, eng, ExportSettings(out_path=out)).run(
-            center_provider=res.make_center_provider(), smooth=False)
+        frame = reader.read_at(0)
+        w._reader, w._info = reader, info
+        w._params = ReframeParams(info.width, info.height, cfg.target_aspect, 1.0, 1.0)
+        w._center_px = w._params.default_center_px()
+        w.scrub.setRange(0, max(0, info.frame_count - 1))
+        w.preview.set_frame(frame)
+        w.controls.set_video_info(info)
+        w._mode = "auto"
+        w._redraw_for_frame(0)
+        app.processEvents()
+        log.info("SELFTEST: nhập + preview OK")
+
+        w.on_analyze()
+        loop = QEventLoop()
+        if w._analysis_worker is not None:
+            w._analysis_worker.finished_ok.connect(lambda _x: loop.quit())
+            w._analysis_worker.failed.connect(lambda _m: loop.quit())
+        QTimer.singleShot(120000, loop.quit)
+        loop.exec()
+        log.info("SELFTEST: phân tích xong (analysis=%s)", w._analysis is not None)
+
+        w._redraw_for_frame(min(3, info.frame_count - 1))       # vẽ auto overlay
+        w.on_background_mode_changed(True)                        # nền mờ compose
+        w._redraw_for_frame(min(3, info.frame_count - 1))
+        app.processEvents()
         reader.release()
-        log.info("SELFTEST xuất OK: %s", out)
+        log.info("SELFTEST GUI OK")
         print("SELFTEST OK", flush=True)
         return 0
     except BaseException as exc:  # noqa: BLE001
