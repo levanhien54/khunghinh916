@@ -154,3 +154,43 @@ def test_composite_crop_skips_blur_compute(monkeypatch):
     rect = CropRect(x=50, y=0, width=270, height=480)
     out = comp.composite_crop_on_blurred_background(frame, rect, 1080, 1920)
     assert np.array_equal(out, comp.crop_and_resize(frame, rect, 1080, 1920))
+
+
+def test_place_foreground_landscape_fit_matches_image():
+    from khunghinh.core.compositing import place_foreground
+    p = place_foreground(1920, 1080, 1080, 1920, 1.0, 0.5, 0.5)
+    assert p.fg_w == 1080          # khít chiều rộng
+    assert abs(p.fg_h - 608) <= 1  # thấp hơn canvas
+    assert p.x == 0                # phủ ngang
+    assert p.y == (1920 - p.fg_h) // 2  # căn giữa dọc (letterbox mờ trên/dưới)
+
+
+def test_place_foreground_zoomed_pans_to_person():
+    from khunghinh.core.compositing import place_foreground
+    center = place_foreground(1920, 1080, 1080, 1920, 2.0, 0.5, 0.5)
+    right = place_foreground(1920, 1080, 1080, 1920, 2.0, 0.85, 0.5)
+    assert center.fg_w > 1080 and center.fg_h < 1920  # rộng hơn canvas, vẫn thấp hơn
+    assert -center.fg_w + 1080 <= center.x <= 0        # kẹp trong biên ngang
+    assert right.x < center.x                          # người lệch phải -> fg dịch trái (pan)
+
+
+def test_place_foreground_person_at_edge_clamps_no_blur_gap():
+    from khunghinh.core.compositing import place_foreground
+    p = place_foreground(1920, 1080, 1080, 1920, 2.0, 1.0, 0.5)
+    assert p.x == 1080 - p.fg_w    # kẹp sát biên phải, không lộ viền ngang
+
+
+def test_place_foreground_small_scale_centers_both_axes():
+    from khunghinh.core.compositing import place_foreground
+    p = place_foreground(1920, 1080, 1080, 1920, 0.5, 0.9, 0.1)  # người lệch nhưng fg<canvas
+    assert p.fg_w < 1080 and p.fg_h < 1920
+    assert p.x == round((1080 - p.fg_w) / 2)   # căn giữa, KHÔNG theo người
+    assert p.y == round((1920 - p.fg_h) / 2)
+
+
+def test_place_foreground_invalid_raises():
+    from khunghinh.core.compositing import place_foreground
+    with pytest.raises(ValueError):
+        place_foreground(0, 100, 100, 100, 1.0, 0.5, 0.5)
+    with pytest.raises(ValueError):
+        place_foreground(100, 100, 100, 100, 0.0, 0.5, 0.5)

@@ -14,6 +14,8 @@ docs/superpowers/specs/2026-07-01-blur-background-reframe-design.md).
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import cv2
 import numpy as np
 
@@ -102,3 +104,47 @@ def composite_crop_on_blurred_background(
     nhận). Giữ tham số downscale_divisor/dim để tương thích chữ ký với nơi gọi.
     """
     return crop_and_resize(frame, rect, target_w, target_h)
+
+
+@dataclass(frozen=True)
+class ForegroundPlacement:
+    """Rect đặt foreground trên canvas (px). x,y = góc trên-trái, CÓ THỂ âm khi tràn."""
+
+    fg_w: int
+    fg_h: int
+    x: int
+    y: int
+
+
+def place_foreground(
+    src_w: int, src_h: int, canvas_w: int, canvas_h: int,
+    fg_scale: float, person_cx_norm: float, person_cy_norm: float,
+) -> ForegroundPlacement:
+    """Tính cỡ + vị trí foreground (video A nguyên khung) trên canvas nền mờ.
+
+    Baseline (fg_scale=1) = contain-fit. Đặt tâm người (norm [0,1]) vào giữa canvas,
+    rồi kẹp theo trục: trục fg >= canvas -> pan bám người trong biên (2 rìa cắt);
+    trục fg < canvas -> căn giữa (letterbox mờ). Xem spec.
+    """
+    if src_w <= 0 or src_h <= 0 or canvas_w <= 0 or canvas_h <= 0:
+        raise ValueError("Kích thước phải > 0")
+    if fg_scale <= 0:
+        raise ValueError("fg_scale phải > 0")
+
+    contain = min(canvas_w / src_w, canvas_h / src_h)
+    fg_w = max(1, round(src_w * contain * fg_scale))
+    fg_h = max(1, round(src_h * contain * fg_scale))
+
+    x = round(canvas_w / 2 - person_cx_norm * fg_w)
+    y = round(canvas_h / 2 - person_cy_norm * fg_h)
+
+    if fg_w >= canvas_w:
+        x = max(canvas_w - fg_w, min(x, 0))   # kẹp [canvas_w-fg_w, 0]
+    else:
+        x = round((canvas_w - fg_w) / 2)
+    if fg_h >= canvas_h:
+        y = max(canvas_h - fg_h, min(y, 0))
+    else:
+        y = round((canvas_h - fg_h) / 2)
+
+    return ForegroundPlacement(int(fg_w), int(fg_h), int(x), int(y))
