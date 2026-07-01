@@ -148,3 +148,29 @@ def place_foreground(
         y = round((canvas_h - fg_h) / 2)
 
     return ForegroundPlacement(int(fg_w), int(fg_h), int(x), int(y))
+
+
+def composite_manual_on_blurred_background(
+    frame: np.ndarray, canvas_w: int, canvas_h: int, fg_scale: float,
+    person_cx_norm: float, person_cy_norm: float,
+    downscale_divisor: int = 32, dim: float = 0.55,
+) -> np.ndarray:
+    """Ghép video A (nguyên khung, cỡ fg_scale, bám người) lên nền mờ phủ kín canvas.
+
+    Nền mờ vẽ trước; foreground resize theo scale (CUBIC khi phóng to) rồi dán phần
+    chồng lấn canvas lên trên (phần tràn bị cắt). Xem spec compose thủ công.
+    """
+    bg = make_blurred_background(frame, canvas_w, canvas_h, downscale_divisor, dim)
+    h, w = frame.shape[:2]
+    p = place_foreground(w, h, canvas_w, canvas_h, fg_scale, person_cx_norm, person_cy_norm)
+
+    interp = cv2.INTER_CUBIC if (p.fg_w > w or p.fg_h > h) else cv2.INTER_AREA
+    fg = cv2.resize(frame, (p.fg_w, p.fg_h), interpolation=interp)
+
+    x0, y0 = max(0, p.x), max(0, p.y)
+    x1, y1 = min(canvas_w, p.x + p.fg_w), min(canvas_h, p.y + p.fg_h)
+    if x1 <= x0 or y1 <= y0:
+        return bg
+    fx0, fy0 = x0 - p.x, y0 - p.y
+    bg[y0:y1, x0:x1] = fg[fy0:fy0 + (y1 - y0), fx0:fx0 + (x1 - x0)]
+    return bg

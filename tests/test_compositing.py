@@ -194,3 +194,37 @@ def test_place_foreground_invalid_raises():
         place_foreground(0, 100, 100, 100, 1.0, 0.5, 0.5)
     with pytest.raises(ValueError):
         place_foreground(100, 100, 100, 100, 0.0, 0.5, 0.5)
+
+
+def test_composite_manual_shape_dtype():
+    from khunghinh.core.compositing import composite_manual_on_blurred_background
+    frame = np.random.randint(0, 255, (1080, 1920, 3), dtype=np.uint8)
+    out = composite_manual_on_blurred_background(frame, 1080, 1920, 1.0, 0.5, 0.5)
+    assert out.shape == (1920, 1080, 3)
+    assert out.dtype == np.uint8
+
+
+def test_composite_manual_foreground_band_differs_from_blur_band():
+    from khunghinh.core.compositing import composite_manual_on_blurred_background
+    # foreground sáng đều, nền mờ bị dim -> band giữa (fg) sáng hơn band trên (blur)
+    frame = np.full((1080, 1920, 3), 240, dtype=np.uint8)
+    out = composite_manual_on_blurred_background(frame, 1080, 1920, 1.0, 0.5, 0.5, dim=0.4)
+    top_band = out[50].mean()       # y=50 nằm vùng letterbox mờ (fg bắt đầu ~y=656)
+    mid_band = out[960].mean()      # y=960 nằm giữa foreground
+    assert mid_band > top_band + 20
+
+
+def test_composite_manual_small_scale_corners_are_blur():
+    from khunghinh.core.compositing import composite_manual_on_blurred_background, place_foreground
+    frame = np.full((1080, 1920, 3), 240, dtype=np.uint8)
+    out = composite_manual_on_blurred_background(frame, 1080, 1920, 0.5, 0.5, 0.5, dim=0.3)
+    p = place_foreground(1920, 1080, 1080, 1920, 0.5, 0.5, 0.5)
+    assert p.x > 0 and p.y > 0                 # fg nhỏ hơn canvas, có viền
+    assert out[0, 0].mean() < 200              # góc canvas là nền mờ (bị dim), không phải fg 240
+
+
+def test_composite_manual_odd_sizes_no_crash():
+    from khunghinh.core.compositing import composite_manual_on_blurred_background
+    frame = np.random.randint(0, 255, (137, 251, 3), dtype=np.uint8)
+    out = composite_manual_on_blurred_background(frame, 1080, 1920, 1.3, 0.6, 0.4)
+    assert out.shape == (1920, 1080, 3) and out.dtype == np.uint8
