@@ -43,12 +43,20 @@ def test_mouth_roi_bottom_edge_clamps():
     assert w >= 1 and h >= 1
 
 
-def test_factory_empty_model_returns_haar():
+def test_factory_default_prefers_yunet_when_model_bundled():
+    # Path rỗng → tự tìm model YuNet bundle ở models/. Có model → YuNet (chính xác
+    # hơn); không có (env khác) → fallback Haar. Luôn trả FaceDetector hợp lệ.
+    from khunghinh.detection.factory import _find_default_yunet_model
+    from khunghinh.detection.yunet_face import YuNetFaceDetector
     det = build_face_detector(AppConfig(yunet_model_path=""))
-    assert isinstance(det, HaarFaceDetector)
     assert isinstance(det, FaceDetector)
+    if _find_default_yunet_model():
+        assert isinstance(det, YuNetFaceDetector)
+    else:
+        assert isinstance(det, HaarFaceDetector)
 
 
 def test_factory_nonexistent_model_falls_back():
+    # Path YuNet đặt TƯỜNG MINH nhưng sai → KHÔNG tự dò default, fallback Haar.
     det = build_face_detector(AppConfig(yunet_model_path="C:/khong/ton/tai/model.onnx"))
     assert isinstance(det, HaarFaceDetector)

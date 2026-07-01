@@ -20,8 +20,9 @@ logs/
 config.json
 *.log
 
-# Models (tải riêng — xem models/README.md)
+# Models — bundle YuNet (MIT, ~227KB) để detect chính xác hơn; các .onnx khác bỏ qua
 models/*.onnx
+!models/face_detection_yunet_2023mar.onnx
 
 # Outputs
 output/

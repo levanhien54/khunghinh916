@@ -37,8 +37,9 @@ class AppConfig:
     fg_scale_min: float = 0.3
     fg_scale_max: float = 3.0
 
-    # --- Model (để trống = tự fallback Haar cascade, không cần tải gì) ---
+    # --- Model (để trống = tự dùng YuNet bundle ở models/, ngược lại fallback Haar) ---
     yunet_model_path: str = ""
+    yunet_input_width: int = 320   # YuNet thu nhỏ về cỡ này trước suy luận (320 ~4x nhanh, vẫn nét)
 
     # --- Phát hiện khuôn mặt ---
     face_detect_width: int = 640        # downscale trước khi detect (tốc độ/độ chính xác)
