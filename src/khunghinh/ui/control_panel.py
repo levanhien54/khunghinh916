@@ -60,9 +60,12 @@ class ControlPanel(QWidget):
     resetRequested = pyqtSignal()
     modeChanged = pyqtSignal(str)        # "manual" | "auto"
     analyzeRequested = pyqtSignal()
-    backgroundModeChanged = pyqtSignal(bool)  # True = bật nền mờ (lớp nền an toàn)
+    backgroundModeChanged = pyqtSignal(bool)  # True = bật nền mờ (compose thủ công)
+    fgScaleChanged = pyqtSignal(float)   # cỡ video A trên nền mờ
+    fgResetRequested = pyqtSignal()      # reset cỡ về 1.0
 
-    def __init__(self, zoom_min: float, zoom_max: float, zoom_def: float, parent=None):
+    def __init__(self, zoom_min: float, zoom_max: float, zoom_def: float,
+                 fg_min: float = 0.3, fg_max: float = 3.0, fg_def: float = 1.0, parent=None):
         super().__init__(parent)
         self.setMinimumWidth(320)
         self._has_video = False
@@ -125,18 +128,24 @@ class ControlPanel(QWidget):
         zlay.addWidget(self.btn_reset)
         root.addWidget(zoom_box)
 
-        # --- Nền mờ (lớp nền an toàn phía dưới khung hình đã cắt) ---
+        # --- Nền mờ (compose thủ công: video A trên nền mờ) ---
         bg_box = QGroupBox("Nền")
         blay = QVBoxLayout(bg_box)
-        self.chk_blur_bg = QCheckBox("Nền mờ (lớp nền an toàn phía dưới khung đã cắt)")
+        self.chk_blur_bg = QCheckBox("Nền mờ — đặt video A lên nền mờ (kiểu CapCut)")
         bg_hint = QLabel(
-            "Thu nhỏ khung hình gốc rồi phóng to làm nền mờ; khung hình đã cắt theo "
-            "Thủ công/Tự động vẫn hoạt động bình thường và phủ kín lên trên nền mờ."
+            "Video A (nguyên khung) đặt lên nền mờ của chính nó; kéo góc trong ô xem "
+            "trước hoặc dùng slider để chỉnh cỡ; vị trí tự bám người nói (chế độ Tự động)."
         )
         bg_hint.setStyleSheet("color: #888; font-size: 11px;")
         bg_hint.setWordWrap(True)
+        self.sld_fg_scale = _ZoomSlider("Cỡ video A", fg_min, fg_max, fg_def)
+        self.btn_fg_reset = QPushButton("Đặt lại cỡ")
+        self.sld_fg_scale.setVisible(False)
+        self.btn_fg_reset.setVisible(False)
         blay.addWidget(self.chk_blur_bg)
         blay.addWidget(bg_hint)
+        blay.addWidget(self.sld_fg_scale)
+        blay.addWidget(self.btn_fg_reset)
         root.addWidget(bg_box)
 
         root.addStretch(1)
@@ -155,11 +164,21 @@ class ControlPanel(QWidget):
         self.sld_zoom_x.valueChanged.connect(self._on_zoom_x)
         self.sld_zoom_y.valueChanged.connect(self._on_zoom_y)
         self.chk_blur_bg.toggled.connect(self._on_blur_bg_toggle)
+        self.sld_fg_scale.valueChanged.connect(self.fgScaleChanged)
+        self.btn_fg_reset.clicked.connect(self.fgResetRequested)
 
     # --- Nền mờ ---
     def _on_blur_bg_toggle(self, checked: bool) -> None:
         is_blur = bool(checked)
+        self.sld_fg_scale.setVisible(is_blur)
+        self.btn_fg_reset.setVisible(is_blur)
         self.backgroundModeChanged.emit(is_blur)
+
+    def set_fg_scale(self, v: float) -> None:
+        """Đồng bộ slider khi cỡ đổi từ nơi khác (gizmo) — không phát lại vòng lặp."""
+        self.sld_fg_scale.blockSignals(True)
+        self.sld_fg_scale.set_value(v)
+        self.sld_fg_scale.blockSignals(False)
 
     def is_blur_background(self) -> bool:
         return self.chk_blur_bg.isChecked()
