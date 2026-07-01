@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 
 from ..config import AppConfig
 from ..core.analysis_result import AnalysisResult
+from ..core.compositing import composite_manual_on_blurred_background, place_foreground
 from ..core.geometry import CropRect, compute_crop_rect
 from ..core.reframe_engine import ReframeEngine, ReframeParams
 from ..core.smoothing import CameraSmoother
@@ -49,6 +50,7 @@ class MainWindow(QMainWindow):
         self._mode = "manual"
         self._cur_frame = 0
         self._blur_bg = False
+        self._fg_scale = config.fg_scale_default
 
         self._analysis: AnalysisResult | None = None
         self._analysis_worker: AnalysisWorker | None = None
@@ -56,7 +58,10 @@ class MainWindow(QMainWindow):
         self._progress: QProgressDialog | None = None
 
         self.preview = PreviewView()
-        self.controls = ControlPanel(config.zoom_min, config.zoom_max, config.zoom_default)
+        self.controls = ControlPanel(
+            config.zoom_min, config.zoom_max, config.zoom_default,
+            config.fg_scale_min, config.fg_scale_max, config.fg_scale_default,
+        )
 
         # Khu vực trái: preview + thanh tua frame.
         left = QWidget()
@@ -93,7 +98,11 @@ class MainWindow(QMainWindow):
         self.controls.modeChanged.connect(self.on_mode_changed)
         self.controls.analyzeRequested.connect(self.on_analyze)
         self.controls.backgroundModeChanged.connect(self.on_background_mode_changed)
+        self.controls.fgScaleChanged.connect(self.on_fg_scale_changed)
+        self.controls.fgResetRequested.connect(self.on_fg_reset)
         self.preview.cropCenterChanged.connect(self.on_crop_dragged)
+        self.preview.fgScaleDragged.connect(self.on_fg_scale_dragged)
+        self.preview.fgResetClicked.connect(self.on_fg_reset)
         self.scrub.valueChanged.connect(self.on_scrub)
 
     # --------------------------- Quản lý worker nền ------------------------
@@ -177,9 +186,23 @@ class MainWindow(QMainWindow):
         if frame is None:
             return
 
-        # Nền mờ chỉ ảnh hưởng bước XUẤT video (xem VideoExporter.run) — preview
-        # tương tác luôn hiển thị khung cắt giống Thủ công/Tự động, tránh dựng lại
-        # composite tốn CPU mỗi lần tua frame.
+        if self._blur_bg:
+            # Chế độ nền mờ: hiện canvas 9:16 đã ghép (video A trên nền mờ) + gizmo.
+            h, w = frame.shape[:2]
+            tw, th = self.config.target_width, self.config.target_height
+            if self._mode == "auto" and self._analysis is not None:
+                cx, cy = self._analysis.centers_for_frame(i)
+            else:
+                cx, cy = w / 2.0, h / 2.0
+            canvas = composite_manual_on_blurred_background(
+                frame, tw, th, self._fg_scale, cx / w, cy / h,
+                downscale_divisor=self.config.bg_blur_downscale_divisor,
+                dim=self.config.bg_blur_dim,
+            )
+            p = place_foreground(w, h, tw, th, self._fg_scale, cx / w, cy / h)
+            self.preview.set_compose(canvas, p.x, p.y, p.fg_w, p.fg_h, self._fg_scale)
+            return
+
         self.preview.set_frame(frame)
         if self._mode == "auto" and self._analysis is not None:
             faces, active = self._analysis.faces_for_frame(i)
@@ -226,9 +249,26 @@ class MainWindow(QMainWindow):
 
     def on_background_mode_changed(self, is_blur: bool) -> None:
         self._blur_bg = is_blur
+        self.preview.set_compose_mode(is_blur)
+        self._redraw_for_frame(self._cur_frame)
         self.statusBar().showMessage(
-            "Nền mờ: bật (lớp nền an toàn khi xuất)." if is_blur else "Nền mờ: tắt."
+            "Nền mờ: video A đặt lên nền mờ (kéo góc để chỉnh cỡ)." if is_blur else "Nền mờ: tắt."
         )
+
+    def on_fg_scale_changed(self, v: float) -> None:
+        self._fg_scale = float(v)
+        self._redraw_for_frame(self._cur_frame)
+
+    def on_fg_scale_dragged(self, v: float) -> None:
+        v = max(self.config.fg_scale_min, min(float(v), self.config.fg_scale_max))
+        self._fg_scale = v
+        self.controls.set_fg_scale(v)      # đồng bộ slider
+        self._redraw_for_frame(self._cur_frame)
+
+    def on_fg_reset(self) -> None:
+        self._fg_scale = self.config.fg_scale_default
+        self.controls.set_fg_scale(self._fg_scale)
+        self._redraw_for_frame(self._cur_frame)
 
     def on_mode_changed(self, mode: str) -> None:
         self._mode = mode
@@ -316,6 +356,7 @@ class MainWindow(QMainWindow):
             blurred_background=self._blur_bg,
             bg_blur_downscale_divisor=self.config.bg_blur_downscale_divisor,
             bg_blur_dim=self.config.bg_blur_dim,
+            fg_scale=self._fg_scale,
         )
         exporter = VideoExporter(export_reader, engine, settings)
 
