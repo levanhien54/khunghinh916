@@ -32,16 +32,19 @@ def setup_logging(level: int = logging.INFO, log_dir: Path | None = None) -> Pat
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
 
-    # Bảo đảm console in được tiếng Việt (Windows mặc định cp1252).
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
-    except Exception:  # noqa: BLE001
-        pass
-
-    console = logging.StreamHandler(sys.stdout)
-    console.setFormatter(fmt)
-    console.setLevel(level)
-    root.addHandler(console)
+    # Console handler CHỈ khi có stdout. Ở chế độ windowed / pythonw (bản .exe không
+    # console) sys.stdout = None → bỏ qua console để không lỗi khi ghi log; toàn bộ
+    # log vẫn được ghi ra file bên dưới.
+    if sys.stdout is not None:
+        # Bảo đảm console in được tiếng Việt (Windows mặc định cp1252).
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001
+            pass
+        console = logging.StreamHandler(sys.stdout)
+        console.setFormatter(fmt)
+        console.setLevel(level)
+        root.addHandler(console)
 
     file_handler = logging.handlers.RotatingFileHandler(
         log_file, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
