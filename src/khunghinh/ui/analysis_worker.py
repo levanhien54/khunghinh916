@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -173,14 +174,49 @@ class AnalysisWorker(QThread):
             pool = ThreadPoolExecutor(max_workers=workers) if workers >= 2 else None
             if pool is not None:
                 cv2.setNumThreads(1)
+
+            # OVERLAP GIẢI MÃ: 1 producer sở hữu reader, giải mã frame vào hàng đợi
+            # song song với main (pool detect+hist → consume). Reader CHỈ producer chạm
+            # (an toàn cv2). Hàng đợi FIFO có chặn ⇒ thứ tự frame BẤT BIẾN ⇒ vẫn
+            # byte-identical. maxsize giới hạn số frame trong luồng (chặn bộ nhớ).
+            frame_q: "queue.Queue" = queue.Queue(maxsize=2 * _DECODE_BATCH)
+            stop_evt = threading.Event()
+            producer_exc: list = []
+
+            def _produce() -> None:
+                try:
+                    while not stop_evt.is_set():
+                        fr = reader.read_next()
+                        if fr is None:
+                            break
+                        while not stop_evt.is_set():
+                            try:
+                                frame_q.put(fr, timeout=0.1)
+                                break
+                            except queue.Full:
+                                continue
+                except Exception as exc:  # noqa: BLE001
+                    producer_exc.append(exc)
+                finally:
+                    while not stop_evt.is_set():
+                        try:
+                            frame_q.put(None, timeout=0.1)  # sentinel EOF (chặn để không rớt)
+                            break
+                        except queue.Full:
+                            continue
+
+            producer = threading.Thread(target=_produce, daemon=True)
+            producer.start()
             try:
-                while True:
+                eof = False
+                while not eof:
                     if self._cancel:
                         raise InterruptedError()
                     batch = []
-                    for _ in range(_DECODE_BATCH):
-                        fr = reader.read_next()
+                    while len(batch) < _DECODE_BATCH:
+                        fr = frame_q.get()
                         if fr is None:
+                            eof = True
                             break
                         batch.append(fr)
                     if not batch:
@@ -198,9 +234,22 @@ class AnalysisWorker(QThread):
                     i += len(batch)
                     self.progress.emit(min(i, total), max(total, i))
             finally:
+                stop_evt.set()
+                # rút cạn để producer (nếu đang chặn ở put) thoát được
+                try:
+                    while True:
+                        frame_q.get_nowait()
+                except queue.Empty:
+                    pass
+                # Join KHÔNG timeout: read_next() luôn trả về ⇒ producer chắc chắn kết
+                # thúc; phải thoát HẲN trước khi outer-finally gọi reader.release()
+                # (cv2.VideoCapture không an toàn đa luồng).
+                producer.join()
                 if pool is not None:
                     pool.shutdown(wait=True)
                     cv2.setNumThreads(prev_cv2_threads)
+            if producer_exc:
+                raise producer_exc[0]
 
             n = i
             raw_centers = st.raw_centers
