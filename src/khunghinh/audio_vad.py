@@ -19,6 +19,9 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
+# Windows: không nháy cửa sổ cmd cho ffmpeg khi chạy bản .exe windowed. 0 trên nền khác.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 
 def ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
@@ -79,7 +82,8 @@ def extract_audio(
            "-acodec", "pcm_s16le", str(wav)]
     try:
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec,
+                                   creationflags=_NO_WINDOW)
         except subprocess.TimeoutExpired:
             log.warning("ffmpeg trích audio quá %.0fs — bỏ qua VAD audio cho video này.", timeout_sec)
             return None

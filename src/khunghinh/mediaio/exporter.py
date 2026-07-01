@@ -23,6 +23,10 @@ from .reader import VideoReader
 
 log = logging.getLogger(__name__)
 
+# Windows: không bật cửa sổ console cho tiến trình con (ffmpeg/ffprobe) — nếu không,
+# ở bản .exe windowed mỗi lần gọi sẽ NHÁY một cửa sổ cmd đen. 0 trên nền khác.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 ProgressCb = Callable[[int, int], None]      # (frame_đã_xử_lý, tổng_frame)
 CancelCb = Callable[[], bool]                # trả True để hủy
 CenterProvider = Callable[[int], "tuple[float, float]"]
@@ -60,7 +64,7 @@ def _probe_audio_codec(src_video: str) -> str:
         proc = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "a:0",
              "-show_entries", "stream=codec_name", "-of", "default=nw=1:nokey=1", src_video],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=15, creationflags=_NO_WINDOW,
         )
         return proc.stdout.strip().splitlines()[0].strip() if proc.stdout.strip() else ""
     except Exception:  # noqa: BLE001
@@ -186,7 +190,8 @@ class VideoExporter:
         cmd = self._build_pipe_cmd(tw, th, fps, src_video)
         log.debug("ffmpeg pipe: %s", " ".join(cmd))
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                creationflags=_NO_WINDOW)
         stderr_tail: list[bytes] = []
 
         def _drain() -> None:

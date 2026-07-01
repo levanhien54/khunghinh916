@@ -50,7 +50,7 @@ def test_no_audio_returns_ones(monkeypatch):
 def test_extract_audio_ffmpeg_timeout_returns_none(monkeypatch, tmp_path):
     monkeypatch.setattr(audio_vad, "ffmpeg_available", lambda: True)
 
-    def fake_run(cmd, capture_output, text, timeout):
+    def fake_run(cmd, capture_output, text, timeout, **kwargs):
         raise subprocess.TimeoutExpired(cmd=cmd, timeout=timeout)
 
     monkeypatch.setattr(audio_vad.subprocess, "run", fake_run)
