@@ -22,6 +22,19 @@ import numpy as np
 from .geometry import CropRect, compute_crop_rect
 
 
+def _pick_interp(src_w: int, src_h: int, dst_w: int, dst_h: int) -> int:
+    """Chọn nội suy theo HƯỚNG + MỨC (cân bằng tốc độ/độ nét):
+    - Phóng to → INTER_CUBIC (nét).
+    - Thu nhỏ NHIỀU (≥2×) → INTER_AREA (khử răng cưa, cần thiết khi 4K→1080).
+    - Thu nhỏ ÍT (0.5–1×) → INTER_LINEAR (nhanh hơn AREA nhiều, chất lượng đủ).
+    """
+    if dst_w > src_w or dst_h > src_h:
+        return cv2.INTER_CUBIC
+    if dst_w * 2 <= src_w or dst_h * 2 <= src_h:
+        return cv2.INTER_AREA
+    return cv2.INTER_LINEAR
+
+
 def fit_dimensions(src_w: int, src_h: int, target_w: int, target_h: int) -> tuple[int, int, int, int]:
     """Co ảnh để vừa TRỌN (contain) trong khung đích, giữ tỉ lệ, căn giữa.
 
@@ -52,7 +65,9 @@ def make_blurred_background(
     divisor = max(1, int(downscale_divisor))
     small_w = max(1, round(w / divisor))
     small_h = max(1, round(h / divisor))
-    small = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_AREA)
+    # Nền mờ → dùng LINEAR cho bước thu nhỏ ~1/32 (nhanh hơn AREA ~120× ở kích thước
+    # này); chất lượng vô nghĩa vì ảnh sẽ bị làm mờ hoàn toàn.
+    small = cv2.resize(frame, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
 
     # Cắt theo tỉ lệ đích trên ảnh đã thu nhỏ trước khi phóng to để PHỦ KÍN
     # khung đích mà không bị méo hình (cùng logic crop-to-fill của core/geometry).
@@ -87,8 +102,7 @@ def crop_and_resize(frame: np.ndarray, rect: CropRect, target_w: int, target_h: 
     if cropped.size == 0:
         cropped = frame
     ch, cw = cropped.shape[:2]
-    upscaling = target_w > cw or target_h > ch
-    interp = cv2.INTER_CUBIC if upscaling else cv2.INTER_AREA
+    interp = _pick_interp(cw, ch, target_w, target_h)
     return cv2.resize(cropped, (target_w, target_h), interpolation=interp)
 
 
@@ -168,7 +182,7 @@ def composite_manual_on_blurred_background(
     h, w = frame.shape[:2]
     p = place_foreground(w, h, canvas_w, canvas_h, fg_scale, person_cx_norm, person_cy_norm)
 
-    interp = cv2.INTER_CUBIC if (p.fg_w > w or p.fg_h > h) else cv2.INTER_AREA
+    interp = _pick_interp(w, h, p.fg_w, p.fg_h)
     fg = cv2.resize(frame, (p.fg_w, p.fg_h), interpolation=interp)
 
     x0, y0 = max(0, p.x), max(0, p.y)
